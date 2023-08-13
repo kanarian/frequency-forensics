@@ -14,6 +14,7 @@ from tqdm import tqdm
 from .data_loader import CombinedDataset, NumpyDataset
 from .models import CNN, Regression, compute_parameter_total, save_model
 
+import datetime
 
 def val_test_loop(
     data_loader,
@@ -44,14 +45,15 @@ def val_test_loop(
         for val_batch in iter(data_loader):
             if type(data_loader.dataset) is CombinedDataset:
                 batch_images = {
-                    key: val_batch[key].cuda(non_blocking=True)
+                    key: val_batch[key]#.cuda(non_blocking=True)
                     for key in data_loader.dataset.key
                 }
             else:
-                batch_images = val_batch[data_loader.dataset.key].cuda(
-                    non_blocking=True
-                )
-            batch_labels = val_batch["label"].cuda(non_blocking=True)
+                batch_images = val_batch[data_loader.dataset.key]
+                #.cuda(
+                    #non_blocking=True
+                #)
+            batch_labels = val_batch["label"]#.cuda(non_blocking=True)
             out = model(batch_images)
             if make_binary_labels:
                 batch_labels[batch_labels > 0] = 1
@@ -150,6 +152,12 @@ def _parse_args():
         default=None,
         help="If specified, training samples are weighted based on their class "
         "in the loss calculation. Expects one weight per class.",
+    )
+
+    parser.add_argument(
+        "--skip-first-quadrant",
+        action="store_true",
+        help="If specified and using the regression model, the first quadrant of the Fourier transform is skipped.",
     )
 
     # one should not specify normalization parameters and request their calculation at the same time
@@ -274,9 +282,11 @@ def main():
     step_total = 0
 
     if args.model == "cnn":
-        model = CNN(args.nclasses, args.features).cuda()
+        model = CNN(args.nclasses, args.features)
+        # .cuda()
     else:
-        model = Regression(args.nclasses).cuda()
+        model = Regression(args.nclasses, skip_first_quadrant=args.skip_first_quadrant)
+        # .cuda()
 
     print("model parameter count:", compute_parameter_total(model))
 
@@ -291,7 +301,8 @@ def main():
         writer = SummaryWriter(writer_str, max_queue=100)
 
     if args.class_weights:
-        loss_fun = torch.nn.NLLLoss(weight=torch.tensor(args.class_weights).cuda())
+        # loss_fun = torch.nn.NLLLoss(weight=torch.tensor(args.class_weights).cuda())
+        loss_fun = torch.nn.NLLLoss(weight=torch.tensor(args.class_weights))
     else:
         loss_fun = torch.nn.NLLLoss()
     optimizer = torch.optim.Adam(
@@ -315,15 +326,15 @@ def main():
             # find the bug.
             if type(train_data_loader.dataset) is CombinedDataset:
                 batch_images = {
-                    key: batch[key].cuda(non_blocking=True)
+                    key: batch[key]#.cuda(non_blocking=True)
                     for key in train_data_loader.dataset.key
                 }
             else:
-                batch_images = batch[train_data_loader.dataset.key].cuda(
-                    non_blocking=True
-                )
+                batch_images = batch[train_data_loader.dataset.key]#.cuda(
+                    #non_blocking=True
+                #)
 
-            batch_labels = batch["label"].cuda(non_blocking=True)
+            batch_labels = batch["label"]#.cuda(non_blocking=True)
             if make_binary_labels:
                 batch_labels[batch_labels > 0] = 1
 
@@ -391,6 +402,7 @@ def main():
         + f"{args.epochs}e"
         + "_"
         + str(args.model)
+        + args.skip_first_quadrant * "_skip_first_quadrant"
     )
     save_model(model, model_file + "_" + str(args.seed) + ".pt")
     print(model_file, " saved.")
@@ -444,7 +456,8 @@ def _save_stats(
     args,
     iterations_per_epoch: int,
 ):
-    stats_file = model_file + "_" + str(args.seed) + ".pkl"
+    date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    stats_file = model_file + "_" + str(args.seed) + "_" + date+".pkl"
     try:
         res = pickle.load(open(stats_file, "rb"))
     except OSError as e:

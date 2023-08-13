@@ -11,7 +11,6 @@ import ptwt
 import pywt
 import torch
 
-
 def compute_packet_rep_2d(
     image: np.ndarray, wavelet_str: str = "haar", max_lev: int = 3
 ) -> np.ndarray:
@@ -48,7 +47,6 @@ def compute_packet_rep_2d(
     img_pywt = np.concatenate(img, axis=0)
     return img_pywt
 
-
 def compute_pytorch_packet_representation_2d_image(
     pt_data: torch.Tensor, wavelet_str: str = "db5", max_lev: int = 5
 ):
@@ -75,6 +73,32 @@ def compute_pytorch_packet_representation_2d_image(
 
     wp_pt = torch.cat(img_pt, dim=1)
     return wp_pt
+
+def compute_pytorch_wavelet_representation_2d_tensor(
+            pt_data: torch.Tensor,
+    wavelet_str: str = "db5",
+    max_lev: int = 5,
+    mode: str = "reflect",
+) -> torch.Tensor:
+    wavelet = pywt.Wavelet(wavelet_str)
+    if wavelet != "haar":
+        res = pywt.wavedec2(data=pt_data, wavelet=wavelet, mode="periodization", level=max_lev, axes=(-2,-1))
+        cA = torch.tensor(res[0])
+        for cH, cV, cD in res[1:]:
+            cH = torch.tensor(cH)
+            cV = torch.tensor(cV)
+            cD = torch.tensor(cD)
+            firstRow = torch.cat([cA, cV], dim=-2)
+            secondRow = torch.cat([cH, cD], dim=-2)
+            cA = torch.cat([firstRow, secondRow], dim=-1)
+    else:
+        res = ptwt.wavedec2(data=pt_data, wavelet=wavelet, mode=mode, level=max_lev)
+        cA = res[0]
+        for cH, cV, cD in res[1:]:
+            firstRow = torch.cat([cA, cV], dim=-2)
+            secondRow = torch.cat([cH, cD], dim=-2)
+            cA = torch.cat([firstRow, secondRow], dim=-1)
+    return cA
 
 
 def compute_pytorch_packet_representation_2d_tensor(
@@ -116,6 +140,68 @@ def compute_pytorch_packet_representation_2d_tensor(
     return wp_pt
 
 
+def batch_haar_denoise_residuals(
+    image_batch: np.ndarray,
+    haar_denoise_level: int = 3,
+    haar_denoise_threshold: float = 4.12,
+) -> np.ndarray:
+    #expects a batch of image of [Batch*C, W, H]
+    print("batch_haar_denoise_residuals")
+
+    wavedec = pywt.wavedec2(data=image_batch, wavelet="haar", level=haar_denoise_level, axes=(-2,-1))
+
+    wavedec[0] = np.where(np.abs(wavedec[0]) >= haar_denoise_threshold, 0, wavedec[0])
+
+    # NOTE: since using residuals, we are setting everything ABOVE the threshold to 0
+    for i in range(1, len(wavedec)):
+        cH, cV, cD = wavedec[i]
+        cH = np.where(np.abs(cH) >= haar_denoise_threshold, 0, cH)
+        cV = np.where(np.abs(cV) >= haar_denoise_threshold, 0, cV)
+        cD = np.where(np.abs(cD) >= haar_denoise_threshold, 0, cD)
+        wavedec[i] = (cH, cV, cD)
+    
+    waverec = pywt.waverec2(wavedec, wavelet="haar", axes=(-2,-1))
+    return waverec
+
+
+def batch_wavelet_preprocessing(
+        image_batch: np.ndarray,
+        wavelet: str = "db1",
+        max_lev: int = 3,
+        eps: float = 1e-12,
+        log_scale: bool = False,
+        mode: str = "reflect",
+        cuda: bool = True,
+        haar_denoise_residuals: bool = False,
+        haar_denoise_level: int = 3,
+        haar_denoise_threshold: float = 4.12,
+) -> np.ndarray:
+    image_batch = image_batch.astype(np.float32)
+    if cuda:
+        image_batch = torch.from_numpy(image_batch)#.cuda()
+    else:
+        image_batch = torch.from_numpy(image_batch)
+
+    # Colour channels can be stacked with the batch dimension
+    image_batch = image_batch.permute(0, 3, 1, 2)
+    N, C, W, H = image_batch.shape
+    image_batch = image_batch.reshape(-1, W, H)
+
+    # get residuals
+    if haar_denoise_residuals:
+        image_batch = batch_haar_denoise_residuals(image_batch, haar_denoise_level, haar_denoise_threshold)
+
+    image_batch = compute_pytorch_wavelet_representation_2d_tensor(
+        image_batch, wavelet_str=wavelet, max_lev=max_lev, mode=mode
+    )
+    # put the colour channels back
+    image_batch = image_batch.reshape(N, C, W, H)
+    if log_scale:
+        image_batch = torch.log(torch.abs(image_batch) + eps)
+
+    image_batch = image_batch.permute(0, 2, 3, 1)
+    return image_batch
+
 def batch_packet_preprocessing(
     image_batch: np.ndarray,
     wavelet: str = "db1",
@@ -124,6 +210,9 @@ def batch_packet_preprocessing(
     log_scale: bool = False,
     mode: str = "reflect",
     cuda: bool = True,
+    haar_denoise_residuals: bool = False,
+    haar_denoise_level: int = 3,
+    haar_denoise_threshold: float = 4.12,
 ) -> np.ndarray:
     """Preprocess image batches by computing the wavelet packet representation.
 
@@ -146,9 +235,16 @@ def batch_packet_preprocessing(
         [np.ndarray]: The wavelet packets [B, N, H, W, C].
     """
     image_batch_tensor = torch.from_numpy(image_batch.astype(np.float32))
-    if cuda:
-        image_batch_tensor = image_batch_tensor.cuda()
-    # transform to from H, W, C to C, H, W
+    # if cuda:
+    #     image_batch_tensor = image_batch_tensor.cuda()
+
+    if haar_denoise_residuals:
+        image_batch_tensor = image_batch_tensor.permute(0, 3, 1, 2)
+        N, C, W, H = image_batch_tensor.shape
+        image_batch_tensor = image_batch_tensor.reshape(-1, W, H)
+        image_batch_tensor = batch_haar_denoise_residuals(image_batch_tensor, haar_denoise_level, haar_denoise_threshold)
+        # now reshape back
+        image_batch_tensor = image_batch_tensor.reshape(N, C, W, H)
     channels = []
     for channel in range(image_batch_tensor.shape[-1]):
         with torch.no_grad():
@@ -167,6 +263,8 @@ def batch_packet_preprocessing(
     return packets.cpu().numpy()
 
 
-def identity_processing(image_batch):
+def identity_processing(image_batch, log_scale=False, eps=1e-12):
     """Return the input unchanged."""
+    if log_scale:
+        image_batch = np.log(np.abs(image_batch) + eps)
     return image_batch

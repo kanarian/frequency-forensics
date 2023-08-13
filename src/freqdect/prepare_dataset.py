@@ -25,7 +25,7 @@ from .corruption import (
 )
 from .data_loader import NumpyDataset
 from .fourier_math import batch_fourier_preprocessing
-from .wavelet_math import batch_packet_preprocessing, identity_processing
+from .wavelet_math import batch_packet_preprocessing, identity_processing, batch_wavelet_preprocessing
 
 
 Perturbation = namedtuple("Perturbation", ["rotate", "crop", "jpeg", "noise", "blur"])
@@ -254,6 +254,8 @@ def load_process_store(
             to apply.
     """
     splits = int(len(file_list) / preprocessing_batch_size)
+    print(f"{splits=}")
+    print(f"preprocssing batching size: {preprocessing_batch_size}")
     batched_files = np.array_split(file_list, splits)
     file_count = 0
     directory = str(target_dir) + "_" + label_string
@@ -299,6 +301,7 @@ def load_folder(
     # noqa: DAR401
     """
     file_list = list(folder.glob("./*.png"))
+    print(f"Found {len(file_list)} images in {folder}.")
     if len(file_list) < train_size + val_size + test_size:
         raise ValueError(
             "Requested set sizes must be smaller or equal to the number of images available."
@@ -324,6 +327,9 @@ def pre_process_folder(
     missing_label: int = None,
     gan_split_factor: float = 1.0,
     level: int = 3,
+    haar_denoise_residuals: bool = False,
+    haar_denoise_level: int = 3,
+    haar_denoise_threshold: float = 4.12,
 ) -> None:
     """Preprocess a folder containing sub-directories with images from different sources.
 
@@ -361,6 +367,8 @@ def pre_process_folder(
         folder_name += "_noise"
     if perturbataion.blur:
         folder_name += "_blur"
+    if haar_denoise_residuals:
+        folder_name += f"_haar_denoise_residuals_{haar_denoise_level}_{haar_denoise_threshold}"
 
     target_dir = data_dir.parent / folder_name
 
@@ -382,10 +390,21 @@ def pre_process_folder(
         processing_function = functools.partial(
             batch_fourier_preprocessing, log_scale=True
         )
+    elif feature == "wavelets":
+        processing_function = functools.partial(batch_wavelet_preprocessing, wavelet=wavelet, mode=boundary, max_lev=level)
+    elif feature == "log_wavelets":
+        processing_function = functools.partial(
+            batch_wavelet_preprocessing, log_scale=True, wavelet=wavelet, mode=boundary, max_lev=level, haar_denoise_residuals=haar_denoise_residuals, haar_denoise_level=haar_denoise_level, haar_denoise_threshold=haar_denoise_threshold)
+    elif feature == "log_raw":
+        processing_function = functools.partial(
+            identity_processing, log_scale=True)
     else:
         processing_function = identity_processing  # type: ignore
 
+    print(f"data_dir {data_dir}")
     folder_list = sorted(data_dir.glob("./*"))
+    folder_list = [folder for folder in folder_list if folder.is_dir()]
+    print(f"folder_list {folder_list}")
 
     if missing_label is not None:
         # split files in folders into training/validation/test
@@ -430,6 +449,7 @@ def pre_process_folder(
         func_load_folder = functools.partial(
             load_folder, train_size=train_size, val_size=val_size, test_size=test_size
         )
+
         with ThreadPoolExecutor(max_workers=len(folder_list)) as pool:
             result_lst = list(pool.map(func_load_folder, folder_list))
         results = np.asarray(result_lst)
@@ -543,6 +563,27 @@ def parse_args():
         default=2048,
         help="The batch_size used for image conversion. (default: 2048).",
     )
+    parser.add_argument(
+        "--haar_denoise_residuals",
+        "-hd",
+        help="Apply Haar denoising to the image data and use residuals instead of image repr.",
+        default=False,
+    )
+    parser.add_argument(
+        "--haar_denoise_level",
+        "-hdl",
+        type=int,
+        help="The level of Haar denoising to apply to the image data.",
+        default=3,
+    )
+    parser.add_argument(
+        "--haar_denoise_threshold",
+        "-hdt",
+        type=float,
+        help="Threshold for denoising.",
+        default=4.12,
+    )
+
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -573,6 +614,24 @@ def parse_args():
         "--log-fourier",
         "-lf",
         help="Save image data as log-scaled Fourier coefficients.",
+        action="store_true",
+    )
+    group.add_argument(
+        "--wavelets",
+        "-w",
+        help="Save image data as Wavelet Coefficients",
+        action="store_true",
+    )
+    group.add_argument(
+        "--log-wavelets",
+        "-lw",
+        help="Save image data as log-scaled Wavelet Coefficients",
+        action="store_true",
+    )
+    group.add_argument(
+        "--log-raw",
+        "-lr",
+        help="Save image data as log-scaled raw coefficients",
         action="store_true",
     )
 
@@ -659,6 +718,12 @@ if __name__ == "__main__":
         feature = "fourier"
     elif args.log_fourier:
         feature = "log_fourier"
+    elif args.wavelets:
+        feature = "wavelets"
+    elif args.log_wavelets:
+        feature = "log_wavelets"
+    elif args.log_raw:
+        feature = "log_raw"
     else:
         feature = "raw"
 
@@ -681,4 +746,7 @@ if __name__ == "__main__":
             blur=args.blur,
         ),
         level=args.level,
+        haar_denoise_residuals=args.haar_denoise_residuals,
+        haar_denoise_level=args.haar_denoise_level,
+        haar_denoise_threshold=args.haar_denoise_threshold,
     )

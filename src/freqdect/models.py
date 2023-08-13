@@ -151,16 +151,29 @@ class CNN(torch.nn.Module):
 class Regression(torch.nn.Module):
     """A shallow linear-regression model."""
 
-    def __init__(self, classes: int):
+    def __init__(self, classes: int, skip_first_quadrant: bool = False ,grayscale: bool = False):
         """Create the regression model.
 
         Args:
             classes (int): The number of classes or sources to classify.
         """
         super().__init__()
-        self.linear = torch.nn.Linear(49152, classes)
+        self.grayscale = grayscale
+        self.skip_first_quadrant = skip_first_quadrant
 
-        # self.activation = torch.nn.Sigmoid()
+        if self.skip_first_quadrant:
+            if grayscale:
+                self.linear = torch.nn.Linear(int(128*128/4*3), classes)
+            else:
+                self.linear = torch.nn.Linear(int(128*128*3/4*3), classes)
+        else:
+            if grayscale:
+                self.linear = torch.nn.Linear(int(128*128), classes)
+            else:
+                self.linear = torch.nn.Linear(int(128*128*3), classes)
+                # self.linear = torch.nn.Linear(int(256*256*3), classes)
+        # Manually added for DB2;
+        # self.linear = torch.nn.Linear(62208, classes)
         self.logsoftmax = torch.nn.LogSoftmax(dim=-1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -174,7 +187,17 @@ class Regression(torch.nn.Module):
             torch.Tensor: A logsoftmax scaled output of shape
                 [batch_size, classes].
         """
-        x_flat = torch.reshape(x, [x.shape[0], -1])
+        # if we want to grayscale and we have 4 dimensions, then the final channel is assumed to be the colour channel.
+        if self.skip_first_quadrant:
+            halfway = int(x.shape[2]/2)
+            # we need to skip the first quadrant
+            top_right = x[:, halfway:, :halfway, :]   
+            bottom_full = x[:, :halfway, :, :]
+            top_right_flat = torch.reshape(top_right, [top_right.shape[0], -1])
+            bottom_full_flat = torch.reshape(bottom_full, [bottom_full.shape[0], -1])
+            x_flat = torch.cat([top_right_flat, bottom_full_flat], dim=-1)
+        else:
+            x_flat = torch.reshape(x, [x.shape[0], -1])
         return self.logsoftmax(self.linear(x_flat))
 
 

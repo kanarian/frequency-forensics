@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from .data_loader import NumpyDataset
+from freqdect.data_loader import NumpyDataset
 
 
 def _plot_mean_std(x, mean, std, color, label="", marker="."):
@@ -154,14 +154,15 @@ def main():
     import matplotlib.pyplot as plt
 
     # raw images - use only the training set.
-    # train_packet_set = NumpyDataset(
-    #    "/nvme/mwolter/ffhq1024x1024_log_packets_haar_reflect_train"
-    # )
     train_packet_set = NumpyDataset(
-        "/nvme/mwolter/ffhq128_hard/source_data_log_packets_db4_boundary_3_train"
+        "/Users/ArianJoyandeh/Desktop/Thesis/Code/frequency-forensics/data/source_data_1024_log_packets_haar_reflect_3_train"
+    #    "/Users/ArianJoyandeh/Desktop/Thesis/Code/frequency-forensics/data/source_data_log_packets_haar_reflect_3_test"
     )
+    # train_packet_set = NumpyDataset(
+    #     "/nvme/mwolter/ffhq128_hard/source_data_log_packets_db4_boundary_3_train"
+    # )
 
-    fake_labels = [2]  # [1, 2, 3, 4]
+    fake_labels = [1]  # [1, 2, 3, 4]
 
     fake_list = []
     real_list = []
@@ -169,6 +170,8 @@ def main():
         train_element = train_packet_set.__getitem__(img_no)
         packets = train_element["image"].numpy()
         label = train_element["label"].numpy()
+        print(f"img_no: {img_no}, label: {label}")
+        print(f"fakeLabels {fake_labels}")
         if label in fake_labels:
             fake_list.append(packets)
         elif label == 0:
@@ -178,15 +181,15 @@ def main():
 
         if img_no % 500 == 0 and img_no > 0:
             print(img_no, "of", train_packet_set.__len__(), "loaded")
-            # break
+            break
 
     fake_array = np.array(fake_list)
     del fake_list
     real_array = np.array(real_list)
     del real_list
-    print("train set loaded.", fake_array.shape, real_array.shape)
 
     # mean image plots
+    print(f"{np.mean(fake_array, axis=(0, -1)).shape=}")
     fake_mean_packet_image = generate_frequency_packet_image(
         np.mean(fake_array, axis=(0, -1)), degree=3
     )
@@ -201,6 +204,7 @@ def main():
         np.std(real_array, axis=(0, -1)), degree=3
     )
 
+
     fig = plt.figure(figsize=(8, 6))
     columns = 3
     rows = 2
@@ -214,12 +218,14 @@ def main():
 
     def _plot_image(image, title, vmax=None, vmin=None):
         fig.add_subplot(rows, columns, plot_count)
+        print(f"plotting {title}")
         plt.imshow(image, cmap=cmap, vmax=vmax, vmin=vmin)
         plt.xticks([], [])
         plt.yticks([], [])
         plt.title(title)
         plt.colorbar()
 
+    print(f"fake mean packets: {fake_mean_packet_image.shape}")
     _plot_image(fake_mean_packet_image, "gan mean packets", mean_vmax, mean_vmin)
     plot_count += 1
     _plot_image(real_mean_packet_image, "data-set mean packets", mean_vmax, mean_vmin)
@@ -239,10 +245,10 @@ def main():
     plot_count += 1
 
     plt.savefig("plot.png")
-    if 0:
-        import tikzplotlib
+    # if 0:
+    #     import tikzplotlib
 
-        tikzplotlib.save("ffhq_style_packet_mean_std_plot.tex", standalone=True)
+    #     tikzplotlib.save("ffhq_style_packet_mean_std_plot.tex", standalone=True)
     plt.show()
     print("first plot done")
 
@@ -266,13 +272,13 @@ def main():
     plt.title("Mean absolute coefficient comparison real data-GAN")
 
     # plt.savefig("plot2.png")
-    if 1:
-        import tikzplotlib
+    # if 1:
+    #     import tikzplotlib
 
-        tikzplotlib.save(
-            "absolute_coeff_comparison_stylegan" + str(fake_labels) + ".tex",
-            standalone=True,
-        )
+    #     tikzplotlib.save(
+    #         "absolute_coeff_comparison_stylegan" + str(fake_labels) + ".tex",
+    #         standalone=True,
+    #     )
     plt.show()
     print("done")
 
